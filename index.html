@@ -313,14 +313,21 @@ async function callGemini(prompt){
 // ──────────────────────────────────────────────
 // 프롬프트 엔지니어링 세트
 // ──────────────────────────────────────────────
-function pDest(kw, type, n){
-  return `당신은 여행 전문 에이전트입니다. 아래 조건에 맞는 여행지 4곳을 추천하세요.
-[조건] 키워드:${kw} / 유형:${type==='domestic'?'국내':'해외'} / 기간:${n}박${n+1}일
-[형식] 다른 설명 없이 아래 형식만:
-DEST1|이모지|여행지명|부제목|추천점수(0-100)|추천이유
-DEST2|이모지|여행지명|부제목|추천점수|추천이유
-DEST3|이모지|여행지명|부제목|추천점수|추천이유
-DEST4|이모지|여행지명|부제목|추천점수|추천이유`;
+
+function pSched(dest, kw, n, type){
+  return `당신은 여행 일정 전문 에이전트입니다. ${dest} ${n}박${n+1}일 일정을 상세하게 만들어주세요.
+[조건]
+1. 키워드(${kw}) 성향을 적극 반영할 것.
+2. 매일 '오전 활동 -> 점심 식사 -> 오후 활동 -> 저녁 식사 -> 야간 활동(선택)' 순으로 빠짐없이 빈틈없는 하루 스케줄을 채울 것.
+3. 식사마다 실제 매칭되는 지역 맛집이름·메뉴·평점을 포함할 것.
+
+[형식] 다른 설명 없이 ${n+1}일치 전체를 아래 규격으로만 출력:
+DAY|일차|테마
+ACT|오전 시간대|오전 활동 내용
+MEAL|점심|식당명|메뉴·특징|평점
+ACT|오후 시간대|오후 상세 활동 내용 및 관광지
+MEAL|저녁|식당명|메뉴·특징|평점
+ACT|저녁/야간|야간 활동 또는 숙소 복귀`;
 }
 
 function pFlight(dest, type, n){
@@ -446,7 +453,7 @@ function renderSched(days){
       <div class="day-dot"></div>
       <div class="day-title">Day ${d.day} — ${d.theme}</div>
       ${d.items.map(item=>item.type==='act'
-        ? `<div class="item-row"><span class="item-time">${item.time}</span><span class="item-text">${item.text}</span></div>`
+        ? `<div class="item-row"><span class="item-time" style="min-width: 65px; display: inline-block;">${item.time}</span><span class="item-text">${item.text}</span></div>`
         : `<div class="item-row"><span class="meal-tag">${item.meal}</span><span class="item-text"><span class="rest-name">${item.name}</span> <span class="rest-desc">${item.desc} ${item.rating}</span></span></div>`
       ).join('')}
     </div>`).join('');
