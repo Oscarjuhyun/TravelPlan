@@ -1,835 +1,558 @@
-"""
-✈️ AI 여행 플래너 — Google Gemini 멀티 에이전트
-================================================
-Streamlit Cloud 배포용
-
-구조:
-  DestinationAgent  → 여행지 탐색
-  FlightAgent       → 항공/교통편 검색
-  ScheduleAgent     → 일정 + 맛집 생성
-  CarAgent          → 렌터카 정보 (해외/섬 한정)
-  SummaryAgent      → 비용 종합 분석
-"""
-
-import time
-import streamlit as st
-import google.generativeai as genai
-
-# ──────────────────────────────────────────────
-# 페이지 설정
-# ──────────────────────────────────────────────
-st.set_page_config(
-    page_title="AI 여행 플래너",
-    page_icon="✈️",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# ──────────────────────────────────────────────
-# 스타일
-# ──────────────────────────────────────────────
-st.markdown("""
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>✈️ AI 여행 플래너</title>
 <style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans KR',sans-serif;background:#F4F7FB;color:#1E3A4A;min-height:100vh}
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
 
-html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
+.container{max-width:860px;margin:0 auto;padding:1.5rem 1rem 3rem}
 
 /* 헤더 */
-.hero {
-    background: linear-gradient(135deg, #0B3D5E 0%, #1A7A8A 60%, #2AB5A0 100%);
-    border-radius: 16px;
-    padding: 2.2rem 2.4rem 1.8rem;
-    margin-bottom: 1.8rem;
-    color: white;
-}
-.hero h1 { font-size: 2rem; font-weight: 700; margin: 0 0 .4rem; letter-spacing: -.02em; }
-.hero p  { font-size: .95rem; opacity: .85; margin: 0; }
+.hero{background:linear-gradient(135deg,#0B3D5E 0%,#1A7A8A 60%,#2AB5A0 100%);border-radius:16px;padding:2rem 2.2rem 1.6rem;margin-bottom:1.6rem;color:white}
+.hero h1{font-size:1.8rem;font-weight:700;margin-bottom:.3rem;letter-spacing:-.02em}
+.hero p{font-size:.9rem;opacity:.85}
 
-/* 에이전트 상태 카드 */
-.agent-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 10px; margin: 1.2rem 0; }
-.agent-card {
-    background: white;
-    border: 1.5px solid #E2ECF4;
-    border-radius: 12px;
-    padding: .9rem .8rem;
-    text-align: center;
-    transition: all .25s;
-}
-.agent-card.running { border-color: #2AB5A0; background: #F0FAFA; }
-.agent-card.done    { border-color: #1A7A8A; background: #EAF6F8; }
-.agent-card.skip    { border-color: #E2ECF4; opacity: .45; }
-.agent-icon  { font-size: 1.5rem; margin-bottom: .3rem; }
-.agent-name  { font-size: .75rem; font-weight: 500; color: #334E6A; }
-.agent-state { font-size: .68rem; color: #6B8EB0; margin-top: .15rem; }
-.agent-card.running .agent-state { color: #2AB5A0; font-weight: 600; }
-.agent-card.done    .agent-state { color: #1A7A8A; font-weight: 600; }
+/* 카드 */
+.card{background:white;border:1px solid #E2ECF4;border-radius:14px;padding:1.2rem 1.4rem;margin-bottom:1.2rem;box-shadow:0 2px 8px rgba(0,60,100,.04)}
+.card-label{font-size:.78rem;font-weight:500;color:#6B8EB0;margin-bottom:.6rem;display:block}
 
-/* 섹션 카드 */
-.sec-wrap {
-    background: white;
-    border: 1px solid #E2ECF4;
-    border-radius: 14px;
-    margin-bottom: 1.2rem;
-    overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0,60,100,.04);
-}
-.sec-head {
-    background: linear-gradient(90deg, #0B3D5E 0%, #1A7A8A 100%);
-    color: white;
-    padding: .75rem 1.2rem;
-    display: flex;
-    align-items: center;
-    gap: .6rem;
-    font-size: .95rem;
-    font-weight: 600;
-}
-.sec-body { padding: 1.1rem 1.3rem; }
+/* API 키 */
+.api-row{display:flex;gap:8px}
+.api-input{flex:1;padding:9px 12px;border:1.5px solid #E2ECF4;border-radius:10px;font-size:.9rem;font-family:monospace;outline:none;transition:border-color .2s}
+.api-input:focus{border-color:#2AB5A0}
+.api-save{padding:9px 18px;background:#2AB5A0;color:white;border:none;border-radius:10px;font-size:.88rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .2s}
+.api-save:hover{background:#1A7A8A}
+.api-hint{font-size:.72rem;color:#6B8EB0;margin-top:.5rem}
+.api-ok{color:#1A7A8A;font-size:.78rem;font-weight:600;margin-top:.4rem;display:none}
 
-/* 여행지 카드 */
-.dest-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 10px; }
-.dest-card {
-    border: 1.5px solid #E2ECF4;
-    border-radius: 12px;
-    padding: 1rem .9rem;
-    text-align: center;
-    cursor: default;
-}
-.dest-card.top { border-color: #2AB5A0; background: linear-gradient(135deg,#F0FAFA,#EAF6F8); }
-.dest-flag { font-size: 2.2rem; }
-.dest-name { font-size: .9rem; font-weight: 700; color: #0B3D5E; margin: .3rem 0 .1rem; }
-.dest-sub  { font-size: .75rem; color: #6B8EB0; }
-.dest-score{ font-size: .75rem; color: #2AB5A0; font-weight: 600; margin-top: .3rem; }
+/* 모델 선택 */
+.model-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:.5rem}
+.model-btn{padding:5px 14px;border:1.5px solid #E2ECF4;border-radius:20px;font-size:.78rem;cursor:pointer;background:white;color:#6B8EB0;transition:all .15s}
+.model-btn.active{border-color:#2AB5A0;background:#E1F5EE;color:#0F6E56;font-weight:600}
 
-/* 항공 카드 */
-.flight-card {
-    border: 1px solid #E2ECF4;
-    border-radius: 10px;
-    padding: .9rem 1rem;
-    margin-bottom: .7rem;
-}
-.flt-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: .6rem; }
-.flt-airline { font-size: .88rem; font-weight: 600; color: #0B3D5E; }
-.flt-price   { font-size: 1rem; font-weight: 700; color: #2AB5A0; }
-.flt-row     { display: flex; align-items: center; gap: 8px; }
-.flt-time    { font-size: 1rem; font-weight: 600; color: #0B3D5E; }
-.flt-line    { flex: 1; height: 1px; background: #E2ECF4; position: relative; }
-.flt-dur     {
-    position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
-    font-size: .68rem; color: #6B8EB0; background: white; padding: 0 4px; white-space: nowrap;
-}
-.badge {
-    display: inline-block; font-size: .7rem; padding: 2px 9px;
-    border-radius: 20px; background: #EAF6F8; color: #1A7A8A;
-    font-weight: 600; margin-top: .4rem;
-}
+/* 폼 */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.form-grid-3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px}
+.input-field{width:100%;padding:9px 12px;border:1.5px solid #E2ECF4;border-radius:10px;font-size:.88rem;outline:none;transition:border-color .2s;background:white}
+.input-field:focus{border-color:#2AB5A0}
+.radio-group{display:flex;gap:0;border:1.5px solid #E2ECF4;border-radius:10px;overflow:hidden}
+.radio-btn{flex:1;padding:9px 0;border:none;background:white;font-size:.88rem;cursor:pointer;color:#6B8EB0;transition:all .2s;font-family:inherit}
+.radio-btn.active{background:#0B3D5E;color:white;font-weight:600}
 
-/* 일정 타임라인 */
-.day-block { border-left: 2px solid #BDDFEA; padding-left: 1rem; margin-left: .5rem; padding-bottom: .9rem; position: relative; }
-.day-dot   { width: 11px; height: 11px; border-radius: 50%; background: #1A7A8A; position: absolute; left: -6.5px; top: 3px; }
-.day-title { font-size: .82rem; font-weight: 700; color: #1A7A8A; margin-bottom: .5rem; }
-.item-row  { display: flex; gap: 8px; margin-bottom: .35rem; align-items: flex-start; }
-.item-time { font-size: .72rem; color: #6B8EB0; white-space: nowrap; padding-top: 2px; min-width: 38px; }
-.item-text { font-size: .83rem; color: #1E3A4A; line-height: 1.4; }
-.meal-tag  {
-    display: inline-block; font-size: .65rem; padding: 1px 7px; border-radius: 20px;
-    background: #FFF5E6; color: #B06E00; font-weight: 600; white-space: nowrap; margin-top: 1px;
-}
-.rest-name { font-weight: 600; }
-.rest-desc { font-size: .75rem; color: #6B8EB0; }
+/* 태그 */
+.tag-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.tag{padding:5px 13px;border:1.5px solid #E2ECF4;border-radius:20px;font-size:.8rem;cursor:pointer;background:white;color:#6B8EB0;transition:all .15s}
+.tag.active{border-color:#2AB5A0;background:#E1F5EE;color:#0F6E56;font-weight:600}
+
+/* 슬라이더 */
+.slider-wrap{display:flex;align-items:center;gap:10px}
+.slider-wrap input[type=range]{flex:1;height:4px;-webkit-appearance:none;accent-color:#2AB5A0}
+.slider-val{font-size:.88rem;font-weight:600;color:#0B3D5E;min-width:52px}
+.num-input{width:100%;padding:9px 12px;border:1.5px solid #E2ECF4;border-radius:10px;font-size:.88rem;text-align:center;outline:none;transition:border-color .2s}
+.num-input:focus{border-color:#2AB5A0}
+.num-label{font-size:.78rem;color:#6B8EB0;margin-bottom:4px;display:block}
+
+/* 실행 버튼 */
+.run-btn{width:100%;padding:13px;background:linear-gradient(135deg,#0B3D5E,#1A7A8A);color:white;border:none;border-radius:12px;font-size:1rem;font-weight:700;cursor:pointer;transition:opacity .2s;margin-top:4px;font-family:inherit}
+.run-btn:hover{opacity:.9}
+.run-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* 에이전트 상태 */
+.agent-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:1.2rem 0}
+.agent-card{background:white;border:1.5px solid #E2ECF4;border-radius:12px;padding:.8rem .6rem;text-align:center;transition:all .3s}
+.agent-card.running{border-color:#2AB5A0;background:#F0FAFA}
+.agent-card.done{border-color:#1A7A8A;background:#EAF6F8}
+.agent-card.skip{opacity:.4}
+.agent-icon{font-size:1.4rem;margin-bottom:.25rem}
+.agent-name{font-size:.72rem;font-weight:500;color:#334E6A}
+.agent-state{font-size:.65rem;color:#6B8EB0;margin-top:.1rem}
+.agent-card.running .agent-state{color:#2AB5A0;font-weight:600}
+.agent-card.done .agent-state{color:#1A7A8A;font-weight:600}
+
+/* 섹션 */
+.sec-wrap{background:white;border:1px solid #E2ECF4;border-radius:14px;margin-bottom:1.1rem;overflow:hidden;box-shadow:0 2px 8px rgba(0,60,100,.04)}
+.sec-head{background:linear-gradient(90deg,#0B3D5E,#1A7A8A);color:white;padding:.7rem 1.1rem;display:flex;align-items:center;gap:.5rem;font-size:.92rem;font-weight:600}
+.sec-body{padding:1rem 1.2rem}
+
+/* 여행지 */
+.dest-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.dest-card{border:1.5px solid #E2ECF4;border-radius:12px;padding:.9rem .8rem;text-align:center}
+.dest-card.top{border-color:#2AB5A0;background:linear-gradient(135deg,#F0FAFA,#EAF6F8)}
+.dest-flag{font-size:2rem;margin-bottom:.2rem}
+.dest-name{font-size:.88rem;font-weight:700;color:#0B3D5E;margin:.25rem 0 .1rem}
+.dest-sub{font-size:.72rem;color:#6B8EB0}
+.dest-score{font-size:.72rem;color:#2AB5A0;font-weight:600;margin-top:.25rem}
+.dest-reason{font-size:.7rem;color:#334E6A;margin-top:.3rem;line-height:1.4}
+
+/* 항공 */
+.flight-card{border:1px solid #E2ECF4;border-radius:10px;padding:.85rem .95rem;margin-bottom:.6rem}
+.flt-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.55rem}
+.flt-airline{font-size:.86rem;font-weight:600;color:#0B3D5E}
+.flt-price{font-size:.98rem;font-weight:700;color:#2AB5A0}
+.flt-row{display:flex;align-items:center;gap:8px}
+.flt-time{font-size:.98rem;font-weight:600;color:#0B3D5E}
+.flt-line{flex:1;height:1px;background:#E2ECF4;position:relative}
+.flt-dur{position:absolute;top:-9px;left:50%;transform:translateX(-50%);font-size:.65rem;color:#6B8EB0;background:white;padding:0 4px;white-space:nowrap}
+.badge{display:inline-block;font-size:.68rem;padding:2px 9px;border-radius:20px;background:#EAF6F8;color:#1A7A8A;font-weight:600;margin-top:.35rem}
+
+/* 일정 */
+.day-block{border-left:2px solid #BDDFEA;padding-left:.9rem;margin-left:.4rem;padding-bottom:.85rem;position:relative}
+.day-dot{width:10px;height:10px;border-radius:50%;background:#1A7A8A;position:absolute;left:-6px;top:3px}
+.day-title{font-size:.8rem;font-weight:700;color:#1A7A8A;margin-bottom:.45rem}
+.item-row{display:flex;gap:7px;margin-bottom:.3rem;align-items:flex-start}
+.item-time{font-size:.7rem;color:#6B8EB0;white-space:nowrap;padding-top:2px;min-width:36px}
+.item-text{font-size:.8rem;color:#1E3A4A;line-height:1.4}
+.meal-tag{display:inline-block;font-size:.63rem;padding:1px 7px;border-radius:20px;background:#FFF5E6;color:#B06E00;font-weight:600;white-space:nowrap;margin-top:1px}
+.rest-name{font-weight:600}
+.rest-desc{font-size:.72rem;color:#6B8EB0}
 
 /* 렌터카 */
-.car-card {
-    border: 1px solid #E2ECF4; border-radius: 10px;
-    padding: .85rem 1rem; margin-bottom: .65rem;
-    display: flex; justify-content: space-between; align-items: center;
-}
-.car-name  { font-size: .9rem; font-weight: 600; color: #0B3D5E; }
-.car-spec  { font-size: .75rem; color: #6B8EB0; margin-top: 2px; }
-.car-day   { font-size: 1rem; font-weight: 700; color: #0B3D5E; text-align: right; }
-.car-total { font-size: .72rem; color: #6B8EB0; text-align: right; margin-top: 1px; }
+.car-card{border:1px solid #E2ECF4;border-radius:10px;padding:.8rem .95rem;margin-bottom:.6rem;display:flex;justify-content:space-between;align-items:center}
+.car-name{font-size:.88rem;font-weight:600;color:#0B3D5E}
+.car-spec{font-size:.72rem;color:#6B8EB0;margin-top:2px}
+.car-day{font-size:.98rem;font-weight:700;color:#0B3D5E;text-align:right}
+.car-total{font-size:.7rem;color:#6B8EB0;text-align:right;margin-top:1px}
 
-/* 비용 요약 */
-.cost-bar {
-    background: linear-gradient(135deg, #0B3D5E, #1A7A8A);
-    border-radius: 14px;
-    padding: 1.1rem 1.5rem;
-    color: white;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px,1fr));
-    gap: 10px;
-    margin-top: 1.2rem;
-}
-.cost-item .cl { font-size: .72rem; opacity: .75; margin-bottom: 3px; }
-.cost-item .cv { font-size: 1.05rem; font-weight: 700; }
-.cost-item.total .cv { font-size: 1.25rem; color: #7DECD8; }
+/* 비용 */
+.cost-bar{background:linear-gradient(135deg,#0B3D5E,#1A7A8A);border-radius:14px;padding:1rem 1.3rem;color:white;display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px}
+.cost-item .cl{font-size:.68rem;opacity:.75;margin-bottom:3px}
+.cost-item .cv{font-size:1rem;font-weight:700}
+.cost-item.total .cv{color:#7DECD8;font-size:1.15rem}
 
-/* 팁 */
-.tip { font-size: .78rem; color: #6B8EB0; margin-top: .7rem; line-height: 1.6; }
+.tip{font-size:.75rem;color:#6B8EB0;margin-top:.65rem;line-height:1.6}
 
-/* 구분선 */
-hr.thin { border: none; border-top: 1px solid #E2ECF4; margin: .8rem 0; }
+/* 로딩 스피너 */
+.spin{display:inline-block;width:10px;height:10px;border:1.5px solid #9FE1CB;border-top-color:#0F6E56;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.hidden{display:none}
+.fade-in{animation:fadeIn .4s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+/* 오류 */
+.error-box{background:#fff0f0;border:1px solid #f7c1c1;border-radius:10px;padding:.8rem 1rem;color:#a32d2d;font-size:.85rem;margin:.8rem 0}
 
 /* 반응형 */
-@media (max-width: 640px) {
-    .agent-grid { grid-template-columns: repeat(3,1fr); }
-    .hero h1 { font-size: 1.4rem; }
+@media(max-width:600px){
+  .agent-grid{grid-template-columns:repeat(3,1fr)}
+  .form-grid,.form-grid-3{grid-template-columns:1fr}
+  .hero h1{font-size:1.4rem}
 }
 </style>
-""", unsafe_allow_html=True)
+</head>
+<body>
+<div class="container">
+
+  <!-- 헤더 -->
+  <div class="hero">
+    <h1>✈️ AI 여행 플래너</h1>
+    <p>Gemini 에이전트 5팀이 여행지 · 항공 · 일정 · 렌터카 · 비용을 한 번에 분석합니다</p>
+  </div>
+
+  <!-- 모델 선택 -->
+  <div class="card">
+    <span class="card-label">🤖 AI 모델 선택</span>
+    <div class="model-row" id="modelRow">
+      <button class="model-btn active" data-model="gemini-2.0-flash" onclick="selectModel(this)">gemini-2.0-flash ⚡ 빠름</button>
+      <button class="model-btn" data-model="gemini-1.5-flash" onclick="selectModel(this)">gemini-1.5-flash</button>
+      <button class="model-btn" data-model="gemini-1.5-pro" onclick="selectModel(this)">gemini-1.5-pro 🧠 정확</button>
+      <button class="model-btn" data-model="gemini-2.5-flash" onclick="selectModel(this)">gemini-2.5-flash 🆕 최신</button>
+    </div>
+  </div>
+
+  <!-- 입력 폼 -->
+  <div class="card">
+    <span class="card-label">🔍 여행 조건 입력</span>
+
+    <div class="form-grid" style="margin-bottom:10px">
+      <input class="input-field" id="kwInput" placeholder="여행 키워드 (예: 바다, 휴식, 아이와 함께)" />
+      <div class="radio-group">
+        <button class="radio-btn active" id="btnDomestic" onclick="setType('domestic')">🏠 국내</button>
+        <button class="radio-btn" id="btnOverseas" onclick="setType('overseas')">✈️ 해외</button>
+      </div>
+    </div>
+
+    <div class="tag-row" id="tagRow">
+      <span class="tag" onclick="toggleTag(this)">🏖 바다</span>
+      <span class="tag" onclick="toggleTag(this)">🌿 자연·숲</span>
+      <span class="tag" onclick="toggleTag(this)">🛕 문화·역사</span>
+      <span class="tag" onclick="toggleTag(this)">🍜 미식</span>
+      <span class="tag" onclick="toggleTag(this)">🧘 힐링·휴식</span>
+      <span class="tag" onclick="toggleTag(this)">👨 👩 👧 아이와 함께</span>
+      <span class="tag" onclick="toggleTag(this)">🏄 액티비티</span>
+      <span class="tag" onclick="toggleTag(this)">🌃 도시·야경</span>
+    </div>
+
+    <div class="form-grid-3">
+      <div>
+        <span class="num-label">여행 기간</span>
+        <div class="slider-wrap">
+          <input type="range" min="1" max="14" value="3" step="1" id="nightsSlider" oninput="updateNights(this.value)" />
+          <span class="slider-val" id="nightsVal">3박 4일</span>
+        </div>
+      </div>
+      <div>
+        <span class="num-label">성인 (만 13세↑)</span>
+        <input class="num-input" type="number" id="adults" min="1" max="20" value="2" />
+      </div>
+      <div>
+        <span class="num-label">아동 (만 12세↓)</span>
+        <input class="num-input" type="number" id="children" min="0" max="10" value="0" />
+      </div>
+    </div>
+
+    <button class="run-btn" id="runBtn" onclick="runAgent()">🚀 여행 계획 생성하기</button>
+  </div>
+
+  <!-- 에이전트 상태 -->
+  <div id="agentWrap" class="hidden">
+    <div class="agent-grid">
+      <div class="agent-card" id="ag-dest"><div class="agent-icon">🗺️</div><div class="agent-name">여행지 탐색</div><div class="agent-state" id="st-dest">대기 중</div></div>
+      <div class="agent-card" id="ag-flight"><div class="agent-icon">✈️</div><div class="agent-name">항공·교통</div><div class="agent-state" id="st-flight">대기 중</div></div>
+      <div class="agent-card" id="ag-sched"><div class="agent-icon">📅</div><div class="agent-name">일정 생성</div><div class="agent-state" id="st-sched">대기 중</div></div>
+      <div class="agent-card" id="ag-car"><div class="agent-icon">🚗</div><div class="agent-name">렌터카</div><div class="agent-state" id="st-car">대기 중</div></div>
+      <div class="agent-card" id="ag-cost"><div class="agent-icon">💰</div><div class="agent-name">비용 분석</div><div class="agent-state" id="st-cost">대기 중</div></div>
+    </div>
+  </div>
+
+  <!-- 오류 -->
+  <div id="errorBox" class="error-box hidden"></div>
+
+  <!-- 결과 -->
+  <div id="resultWrap" class="hidden"></div>
 
-
-# ──────────────────────────────────────────────
-# Gemini 초기화
-# ──────────────────────────────────────────────
-def get_gemini(api_key: str, model: str = "gemini-3.0-flash-lite"):
-    genai.configure(api_key=AlzaSyDMKPsCbasu2XmvSHD8HkyN-AtB24-0wx0)
-    return genai.GenerativeModel(model)
-
-
-def call_gemini(model, prompt: str, retries: int = 2) -> str:
-    """Gemini 호출 with 재시도."""
-    for attempt in range(retries + 1):
-        try:
-            resp = model.generate_content(prompt)
-            return resp.text.strip()
-        except Exception as e:
-            if attempt == retries:
-                return f"[오류] {e}"
-            time.sleep(1.5)
-
-
-# ──────────────────────────────────────────────
-# 5개 에이전트 프롬프트
-# ──────────────────────────────────────────────
-
-def prompt_destination(keywords: str, travel_type: str, nights: int) -> str:
-    return f"""
-당신은 여행 전문 에이전트입니다.
-아래 조건에 맞는 여행지 4곳을 추천하세요.
-
-[조건]
-- 여행 키워드: {keywords}
-- 여행 유형: {travel_type}
-- 여행 기간: {nights}박 {nights+1}일
-
-[출력 형식 — 정확히 지켜주세요]
-아래 형식으로 4개 여행지를 출력하세요. 다른 설명 없이 이 형식만:
-
-DEST1|이모지|여행지명|부제목(지역 특징)|추천점수(0-100)|추천이유 한 줄
-
-예시:
-DEST1|🌊|제주도|에메랄드 바다·오름·흑돼지|98|사계절 아름다운 자연과 풍부한 먹거리
-DEST2|🏔|강원 속초|설악산·청초호·대게|94|웅장한 산과 시원한 바다를 동시에
-DEST3|🌅|전남 여수|돌산도·오동도·해넘이|91|낭만적인 항구와 신선한 해산물의 도시
-DEST4|🏖|부산 해운대|해수욕장·광안대교·야경|96|세련된 도시 감성과 바다가 공존하는 곳
-""".strip()
-
-
-def prompt_flight(destination: str, travel_type: str, nights: int) -> str:
-    domestic_note = "국내선 또는 KTX/버스 등 육상 교통도 포함하세요." if travel_type == "국내" else "국제선 항공편 위주로 작성하세요."
-    return f"""
-당신은 항공·교통 전문 에이전트입니다.
-{destination} 여행 ({nights}박 {nights+1}일)의 교통편 2~3개를 추천하세요.
-{domestic_note}
-
-[출력 형식 — 정확히 지켜주세요]
-FLIGHT|항공사 또는 교통수단|출발지·출발시간|도착지·도착시간|소요시간|편도요금|직항여부(직항/경유/직행)
-
-예시(해외):
-FLIGHT|대한항공 KE763|인천(ICN) 08:05|나하(OKA) 10:25|2시간 20분|245,000원~|직항
-FLIGHT|진에어 LJ055|인천(ICN) 10:30|나하(OKA) 12:50|2시간 20분|198,000원~|직항
-
-예시(국내):
-FLIGHT|KTX|서울(수서) 06:30|부산(부전) 08:58|2시간 28분|59,800원~|직행
-FLIGHT|무궁화호|서울(청량리) 07:00|강릉 10:30|3시간 30분|27,000원~|직행
-
-주의: 다른 설명 없이 FLIGHT 형식 줄만 출력하세요.
-""".strip()
-
-
-def prompt_schedule(destination: str, keywords: str, nights: int, travel_type: str) -> str:
-    return f"""
-당신은 여행 일정 전문 에이전트입니다.
-{destination} {nights}박 {nights+1}일 여행 일정을 만들어주세요.
-
-[조건]
-- 키워드: {keywords}
-- 식사는 반드시 아침/점심/저녁 각 실제 맛집 이름과 대표메뉴, 평점 포함
-
-[출력 형식 — 정확히 지켜주세요]
-DAY|일차번호|테마
-
-그리고 각 항목:
-ACT|시간대|활동내용
-MEAL|끼니(아침/점심/저녁)|식당명|대표메뉴·특징|평점
-
-예시:
-DAY|1|도착 & 구시가지 탐방
-ACT|오전|공항 도착 후 숙소 체크인
-MEAL|점심|제일식당|갈치조림 정식 · 고등어구이|★4.7
-ACT|오후|성산일출봉 트레킹 (40분 코스)
-MEAL|저녁|해녀의집|전복뚝배기 · 해물탕|★4.6
-DAY|2|해안 드라이브
-ACT|오전|협재해수욕장 산책
-MEAL|아침|카페 이디엘|오션뷰 브런치 · 에그베네딕트|★4.8
-
-{nights+1}일치 전체를 출력하세요. 다른 설명 없이 형식만 출력하세요.
-""".strip()
-
-
-def prompt_car(destination: str, nights: int, total_people: int = 2) -> str:
-    # 인원에 맞는 차종 추천을 위해 좌석 기준 분기
-    seat_note = "4인승 이하 차량도 포함하세요." if total_people <= 2 else \
-                f"총 {total_people}명이 탑승 가능한 차량 위주로 추천하세요."
-    return f"""
-당신은 렌터카 전문 에이전트입니다.
-{destination} 여행 ({nights}일 렌트, 총 {total_people}명) 렌터카 3가지를 추천하세요.
-{seat_note}
-
-[출력 형식 — 정확히 지켜주세요]
-CAR|차종명|등급(소형/중형/SUV/미니밴)|좌석수|변속기|일일요금|총요금({nights}일)|주의사항
-
-예시:
-CAR|Toyota Yaris|소형|4인승|자동|38,000원|{38000*nights:,}원|국제운전면허증 필수
-CAR|Honda Fit|소형|5인승|자동|42,000원|{42000*nights:,}원|만 21세 이상
-CAR|Toyota RAV4|SUV|5인승|자동|72,000원|{72000*nights:,}원|산악도로 추천
-
-다른 설명 없이 CAR 형식 줄만 출력하세요.
-""".strip()
-
-
-def prompt_summary(destination: str, travel_type: str, nights: int,
-                   flight_text: str, car_text: str,
-                   adults: int = 2, children: int = 0) -> str:
-    total = adults + children
-    people_desc = f"성인 {adults}명" + (f" + 아동 {children}명" if children > 0 else "")
-    child_note = f"\n- 아동 {children}명의 항공 소아 요금(성인의 약 75%), 아동 입장료 할인도 반영하세요." if children > 0 else ""
-    return f"""
-당신은 여행 비용 분석 전문 에이전트입니다.
-아래 정보를 바탕으로 총 {total}명 기준 여행 비용을 분석하세요.
-
-[여행 정보]
-- 목적지: {destination}
-- 유형: {travel_type}
-- 기간: {nights}박 {nights+1}일
-- 인원: {people_desc} (총 {total}명){child_note}
-
-[항공/교통 정보]
-{flight_text}
-
-[렌터카 정보]
-{car_text}
-
-[출력 형식 — 정확히 지켜주세요]
-COST|항목명|{total}명 기준 금액|설명
-
-예시 ({total}명 기준):
-COST|항공권 (왕복·{total}명)|{596000*(total//2) if total>=2 else 298000}원|인당 요금 기준
-COST|렌터카|114,000원|소형 3일 기준
-COST|숙박 예상|{120000*nights}원|{nights}박·중급 호텔 기준
-COST|식비 예상|{total*20000*nights*(nights+1)//nights}원|1인 1끼 20,000원 기준
-COST|입장료·액티비티|{40000*total}원|주요 관광지 {total}명 기준
-COST|합계|1,390,000원|{total}명·{nights}박 {nights+1}일 예상 총비용
-
-다른 설명 없이 COST 형식 줄만 출력하세요.
-""".strip()
-
-
-# ──────────────────────────────────────────────
-# 파서
-# ──────────────────────────────────────────────
-def parse_destinations(text: str) -> list[dict]:
-    dests = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("DEST"):
-            continue
-        parts = line.split("|")
-        if len(parts) >= 6:
-            dests.append({
-                "rank":   parts[0],
-                "flag":   parts[1],
-                "name":   parts[2],
-                "sub":    parts[3],
-                "score":  parts[4],
-                "reason": parts[5],
-            })
-    return dests
-
-
-def parse_flights(text: str) -> list[dict]:
-    flights = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("FLIGHT"):
-            continue
-        parts = line.split("|")
-        if len(parts) >= 7:
-            flights.append({
-                "airline": parts[1],
-                "dep":     parts[2],
-                "arr":     parts[3],
-                "dur":     parts[4],
-                "price":   parts[5],
-                "direct":  parts[6],
-            })
-    return flights
-
-
-def parse_schedule(text: str) -> list[dict]:
-    days = []
-    current = None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("DAY|"):
-            parts = line.split("|")
-            current = {"day": parts[1], "theme": parts[2] if len(parts) > 2 else "", "items": []}
-            days.append(current)
-        elif line.startswith("ACT|") and current:
-            parts = line.split("|")
-            current["items"].append({"type": "act", "time": parts[1], "text": parts[2] if len(parts) > 2 else ""})
-        elif line.startswith("MEAL|") and current:
-            parts = line.split("|")
-            current["items"].append({
-                "type":   "meal",
-                "meal":   parts[1] if len(parts) > 1 else "",
-                "name":   parts[2] if len(parts) > 2 else "",
-                "desc":   parts[3] if len(parts) > 3 else "",
-                "rating": parts[4] if len(parts) > 4 else "",
-            })
-    return days
-
-
-def parse_cars(text: str) -> list[dict]:
-    cars = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("CAR|"):
-            continue
-        parts = line.split("|")
-        if len(parts) >= 7:
-            cars.append({
-                "name":  parts[1],
-                "grade": parts[2],
-                "seats": parts[3],
-                "trans": parts[4],
-                "day":   parts[5],
-                "total": parts[6],
-                "note":  parts[7] if len(parts) > 7 else "",
-            })
-    return cars
-
-
-def parse_costs(text: str) -> list[dict]:
-    costs = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("COST|"):
-            continue
-        parts = line.split("|")
-        if len(parts) >= 4:
-            costs.append({"label": parts[1], "amount": parts[2], "desc": parts[3]})
-    return costs
-
-
-# ──────────────────────────────────────────────
-# 렌더 함수
-# ──────────────────────────────────────────────
-def render_destinations(dests: list[dict]):
-    if not dests:
-        st.warning("여행지 데이터를 파싱하지 못했습니다.")
-        return
-    cols = st.columns(len(dests))
-    for col, d in zip(cols, dests):
-        is_top = d["rank"] == "DEST1"
-        border = "top" if is_top else ""
-        col.markdown(f"""
-        <div class="dest-card {border}">
-            <div class="dest-flag">{d['flag']}</div>
-            <div class="dest-name">{d['name']}</div>
-            <div class="dest-sub">{d['sub']}</div>
-            <div class="dest-score">추천도 {d['score']}점</div>
-            <div style="font-size:.72rem;color:#334E6A;margin-top:.4rem;line-height:1.4">{d['reason']}</div>
-        </div>""", unsafe_allow_html=True)
-
-
-def render_flights(flights: list[dict]):
-    if not flights:
-        st.warning("항공편 데이터를 파싱하지 못했습니다.")
-        return
-    for f in flights:
-        st.markdown(f"""
-        <div class="flight-card">
-          <div class="flt-top">
-            <span class="flt-airline">{f['airline']}</span>
-            <span class="flt-price">{f['price']}</span>
-          </div>
-          <div class="flt-row">
-            <span class="flt-time">{f['dep']}</span>
-            <div class="flt-line"><span class="flt-dur">{f['dur']}</span></div>
-            <span class="flt-time">{f['arr']}</span>
-          </div>
-          <span class="badge">{f['direct']}</span>
-        </div>""", unsafe_allow_html=True)
-    st.markdown('<p class="tip">* 왕복 기준, 성수기 및 예약 시점에 따라 가격이 달라질 수 있습니다.</p>',
-                unsafe_allow_html=True)
-
-
-def render_schedule(days: list[dict]):
-    if not days:
-        st.warning("일정 데이터를 파싱하지 못했습니다.")
-        return
-    for d in days:
-        items_html = ""
-        for item in d["items"]:
-            if item["type"] == "act":
-                items_html += f"""
-                <div class="item-row">
-                  <span class="item-time">{item['time']}</span>
-                  <span class="item-text">{item['text']}</span>
-                </div>"""
-            else:
-                items_html += f"""
-                <div class="item-row">
-                  <span class="meal-tag">{item['meal']}</span>
-                  <span class="item-text">
-                    <span class="rest-name">{item['name']}</span>
-                    &nbsp;<span class="rest-desc">{item['desc']}&nbsp;{item['rating']}</span>
-                  </span>
-                </div>"""
-
-        st.markdown(f"""
-        <div class="day-block">
-          <div class="day-dot"></div>
-          <div class="day-title">Day {d['day']} — {d['theme']}</div>
-          {items_html}
-        </div>""", unsafe_allow_html=True)
-
-
-def render_cars(cars: list[dict]):
-    if not cars:
-        st.warning("렌터카 데이터를 파싱하지 못했습니다.")
-        return
-    for c in cars:
-        st.markdown(f"""
-        <div class="car-card">
-          <div>
-            <div class="car-name">{c['name']}</div>
-            <div class="car-spec">{c['grade']} · {c['trans']} · {c['seats']} · {c['note']}</div>
-          </div>
-          <div>
-            <div class="car-day">{c['day']}<span style="font-size:.72rem;font-weight:400;color:#6B8EB0">/일</span></div>
-            <div class="car-total">합계 {c['total']}</div>
-          </div>
-        </div>""", unsafe_allow_html=True)
-    st.markdown('<p class="tip">* 국제운전면허증 필수. 현지 유류비·톨비 별도. 보험 포함 여부 확인 필수.</p>',
-                unsafe_allow_html=True)
-
-
-def render_costs(costs: list[dict]):
-    if not costs:
-        st.warning("비용 데이터를 파싱하지 못했습니다.")
-        return
-    items_html = ""
-    for c in costs:
-        is_total = "합계" in c["label"]
-        cls = "cost-item total" if is_total else "cost-item"
-        items_html += f"""
-        <div class="{cls}">
-          <div class="cl">{c['label']}</div>
-          <div class="cv">{c['amount']}</div>
-        </div>"""
-    st.markdown(f'<div class="cost-bar">{items_html}</div>', unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────
-# 에이전트 상태 렌더
-# ──────────────────────────────────────────────
-AGENT_META = [
-    ("dest",   "🗺️", "여행지 탐색"),
-    ("flight", "✈️", "항공·교통"),
-    ("sched",  "📅", "일정 생성"),
-    ("car",    "🚗", "렌터카"),
-    ("cost",   "💰", "비용 분석"),
-]
-
-def render_agent_bar(states: dict):
-    cols = st.columns(5)
-    for col, (key, icon, name) in zip(cols, AGENT_META):
-        state = states.get(key, "wait")
-        label = {"wait": "대기 중", "running": "실행 중...", "done": "완료 ✓", "skip": "해당없음"}.get(state, "")
-        cls   = {"running": "running", "done": "done", "skip": "skip"}.get(state, "")
-        col.markdown(f"""
-        <div class="agent-card {cls}">
-          <div class="agent-icon">{icon}</div>
-          <div class="agent-name">{name}</div>
-          <div class="agent-state">{label}</div>
-        </div>""", unsafe_allow_html=True)
-
-
-def section_wrap(icon: str, title: str, content_fn):
-    st.markdown(f"""
-    <div class="sec-wrap">
-      <div class="sec-head"><span>{icon}</span><span>{title}</span></div>
-      <div class="sec-body">""", unsafe_allow_html=True)
-    content_fn()
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────
-# 메인 UI
-# ──────────────────────────────────────────────
-st.markdown("""
-<div class="hero">
-  <h1>✈️ AI 여행 플래너</h1>
-  <p>키워드를 입력하면 Gemini 에이전트 5팀이 여행지 · 항공 · 일정 · 렌터카 · 비용을 한 번에 분석합니다</p>
 </div>
-""", unsafe_allow_html=True)
 
-# ── API 키 입력
-with st.expander("🔑 Gemini API 키 설정", expanded="api_key" not in st.session_state):
-    api_input = st.text_input(
-        "Gemini API Key",
-        type="password",
-        placeholder="AIza...",
-        help="Google AI Studio (aistudio.google.com) 에서 무료로 발급받을 수 있습니다.",
-    )
-    if st.button("저장", type="primary"):
-        if api_input.startswith("AIza") or len(api_input) > 20:
-            st.session_state.api_key = api_input
-            st.success("API 키가 저장됐습니다.")
-            st.rerun()
-        else:
-            st.error("유효한 API 키를 입력하세요.")
+<script>
+// ──────────────────────────────────────────────
+// 상태
+// ──────────────────────────────────────────────
+let API_KEY   = 'AlzaSyDMKPsCbasu2XmvSHD8HkyN-AtB24-0wx0';  // ← 여기에 API 키 입력
+// ★ 184번째 줄에 해당 — 모델명
+let MODEL     = 'gemini-3.0-flash';
+let travelType = 'domestic';
+let nights    = 3;
+let activeTags = new Set();
 
-    st.caption("🔒 키는 세션 내에서만 유지되며 서버에 저장되지 않습니다.")
+// ──────────────────────────────────────────────
+// API 키 & 모델
+// ──────────────────────────────────────────────
 
-# Streamlit Cloud Secrets 지원
-if "api_key" not in st.session_state:
-    try:
-        st.session_state.api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        pass
 
-if "api_key" not in st.session_state:
-    st.info("Gemini API 키를 입력하면 여행 계획을 생성할 수 있습니다.")
-    st.stop()
+function selectModel(btn){
+  document.querySelectorAll('.model-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  // ★ 이 줄이 app.py 184번째 줄의 모델 지정과 동일한 역할
+  MODEL = btn.dataset.model;
+}
 
-# ── 입력 폼
-st.markdown("### 🔍 여행 조건 입력")
+// ──────────────────────────────────────────────
+// 폼 인터랙션
+// ──────────────────────────────────────────────
+function setType(t){
+  travelType = t;
+  document.getElementById('btnDomestic').classList.toggle('active', t==='domestic');
+  document.getElementById('btnOverseas').classList.toggle('active', t==='overseas');
+}
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    keywords = st.text_input(
-        "여행 키워드",
-        placeholder="예: 바다, 휴식, 아이와 함께, 미식, 액티비티",
-        label_visibility="collapsed",
-    )
-with col2:
-    travel_type = st.radio("여행 유형", ["국내", "해외"], horizontal=True, label_visibility="collapsed")
+function toggleTag(el){
+  el.classList.toggle('active');
+  const txt = el.textContent.trim();
+  activeTags.has(txt) ? activeTags.delete(txt) : activeTags.add(txt);
+}
 
-# 태그 버튼
-TAGS = ["🏖 바다", "🌿 자연·숲", "🛕 문화·역사", "🍜 미식", "🧘 힐링·휴식",
-        "👨 👩 👧 아이와 함께", "🏄 액티비티", "🌃 도시·야경"]
+function updateNights(v){
+  nights = parseInt(v);
+  document.getElementById('nightsVal').textContent = nights+'박 '+(nights+1)+'일';
+}
 
-if "active_tags" not in st.session_state:
-    st.session_state.active_tags = set()
+function getKeywords(){
+  const manual = document.getElementById('kwInput').value.trim();
+  const tags   = [...activeTags].map(t=>t.replace(/^[^\w가-힣]+/,'').trim());
+  const all    = manual ? [manual,...tags] : tags;
+  return all.length ? all.join(', ') : '기본 추천';
+}
 
-tag_cols = st.columns(len(TAGS))
-for col, tag in zip(tag_cols, TAGS):
-    active = tag in st.session_state.active_tags
-    label = f"{'✓ ' if active else ''}{tag}"
-    if col.button(label, key=f"tag_{tag}", use_container_width=True):
-        if tag in st.session_state.active_tags:
-            st.session_state.active_tags.discard(tag)
-        else:
-            st.session_state.active_tags.add(tag)
-        st.rerun()
+function getPeople(){
+  return {
+    adults:   parseInt(document.getElementById('adults').value)||2,
+    children: parseInt(document.getElementById('children').value)||0,
+  };
+}
 
-# 여행 기간 + 인원
-dur_col, adult_col, child_col = st.columns([2, 1, 1])
-with dur_col:
-    nights = st.slider("여행 기간", 1, 14, 3, format="%d박")
-    st.caption(f"선택된 기간: {nights}박 {nights+1}일")
-with adult_col:
-    adults = st.number_input("성인 (만 13세 이상)", min_value=1, max_value=20, value=2, step=1)
-with child_col:
-    children = st.number_input("아동 (만 12세 이하)", min_value=0, max_value=10, value=0, step=1)
+// ──────────────────────────────────────────────
+// 에이전트 상태 UI
+// ──────────────────────────────────────────────
+function agState(id, state, msg){
+  const card = document.getElementById('ag-'+id);
+  const st   = document.getElementById('st-'+id);
+  card.className = 'agent-card '+(state||'');
+  st.innerHTML = state==='running'
+    ? `<span class="spin"></span>${msg}`
+    : msg;
+}
 
-total_people = adults + children
-people_label = f"성인 {adults}명" + (f" + 아동 {children}명" if children > 0 else "")
-st.caption(f"총 인원: {people_label} ({total_people}명)")
+// ──────────────────────────────────────────────
+// Gemini API 호출 (app.py 185번째 줄 역할)
+// ──────────────────────────────────────────────
+async function callGemini(prompt){
+  // ★ 이 URL이 app.py 185번째 줄 genai.configure(api_key=api_key) 와 동일한 역할
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
+  const res = await fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+  });
+  if(!res.ok){
+    const err = await res.json();
+    throw new Error(err.error?.message || '알 수 없는 오류');
+  }
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
 
-# 키워드 합치기
-all_kw_parts = []
-if keywords:
-    all_kw_parts.append(keywords)
-all_kw_parts += [t.split(" ", 1)[1] if " " in t else t for t in st.session_state.active_tags]
-all_keywords = ", ".join(all_kw_parts) if all_kw_parts else "기본 추천"
+// ──────────────────────────────────────────────
+// 프롬프트 (app.py 205~326번째 줄과 동일)
+// ──────────────────────────────────────────────
+function pDest(kw, type, n){
+  return `당신은 여행 전문 에이전트입니다. 아래 조건에 맞는 여행지 4곳을 추천하세요.
+[조건] 키워드:${kw} / 유형:${type==='domestic'?'국내':'해외'} / 기간:${n}박${n+1}일
+[형식] 다른 설명 없이 아래 형식만:
+DEST1|이모지|여행지명|부제목|추천점수(0-100)|추천이유
+DEST2|이모지|여행지명|부제목|추천점수|추천이유
+DEST3|이모지|여행지명|부제목|추천점수|추천이유
+DEST4|이모지|여행지명|부제목|추천점수|추천이유`;
+}
 
-st.divider()
-run_btn = st.button(
-    "🚀 여행 계획 생성하기",
-    type="primary",
-    use_container_width=True,
-    disabled=st.session_state.get("running", False),
-)
+function pFlight(dest, type, n){
+  const note = type==='domestic'
+    ? '국내선 또는 KTX/버스 육상교통 포함' : '국제선 항공편 위주';
+  return `당신은 항공·교통 전문 에이전트입니다. ${dest} 여행(${n}박${n+1}일) 교통편 2~3개를 추천하세요. ${note}
+[형식] 다른 설명 없이:
+FLIGHT|항공사/교통수단|출발지·출발시간|도착지·도착시간|소요시간|편도요금|직항여부`;
+}
 
-# ──────────────────────────────────────────────
-# Agent 실행
-# ──────────────────────────────────────────────
-if run_btn:
-    st.session_state.running = True
-    st.session_state.result  = None
+function pSched(dest, kw, n, type){
+  return `당신은 여행 일정 전문 에이전트입니다. ${dest} ${n}박${n+1}일 일정을 만들어주세요.
+키워드:${kw} / 식사마다 실제 맛집이름·메뉴·평점 포함
+[형식] 다른 설명 없이 ${n+1}일치 전체:
+DAY|일차|테마
+ACT|시간대|활동내용
+MEAL|아침/점심/저녁|식당명|메뉴·특징|평점`;
+}
 
-    model = get_gemini(st.session_state.api_key)
+function pCar(dest, n, total){
+  const seat = total<=2 ? '소형 포함' : `총 ${total}명 탑승 가능 차량 위주`;
+  return `당신은 렌터카 전문 에이전트입니다. ${dest} 여행(${n}일, ${total}명) 렌터카 3종 추천. ${seat}
+[형식] 다른 설명 없이:
+CAR|차종명|등급|좌석수|변속기|일일요금|총요금(${n}일)|주의사항`;
+}
 
-    agent_states = {k: "wait" for k, _, _ in AGENT_META}
-    agent_ph = st.empty()
+function pCost(dest, type, n, flightTxt, carTxt, adults, children){
+  const total = adults+children;
+  const ppl   = `성인${adults}명`+(children>0?`+아동${children}명`:'');
+  const child_note = children>0 ? `아동${children}명 소아요금(성인 75%) 반영` : '';
+  return `당신은 여행 비용 분석 에이전트입니다. ${ppl}(총${total}명) 기준 여행비용 분석.
+목적지:${dest} / 유형:${type==='domestic'?'국내':'해외'} / ${n}박${n+1}일 / ${child_note}
+[항공] ${flightTxt}
+[렌터카] ${carTxt}
+[형식] 다른 설명 없이:
+COST|항목명|${total}명 기준 금액|설명`;
+}
 
-    results = {}
+// ──────────────────────────────────────────────
+// 파서
+// ──────────────────────────────────────────────
+function parseDests(txt){
+  return txt.split('\n').filter(l=>l.match(/^DEST\d/)).map(l=>{
+    const p=l.split('|');
+    return {rank:p[0],flag:p[1]||'',name:p[2]||'',sub:p[3]||'',score:p[4]||'',reason:p[5]||''};
+  });
+}
+function parseFlights(txt){
+  return txt.split('\n').filter(l=>l.startsWith('FLIGHT|')).map(l=>{
+    const p=l.split('|');
+    return {airline:p[1]||'',dep:p[2]||'',arr:p[3]||'',dur:p[4]||'',price:p[5]||'',direct:p[6]||''};
+  });
+}
+function parseSched(txt){
+  const days=[]; let cur=null;
+  txt.split('\n').forEach(l=>{
+    l=l.trim();
+    if(l.startsWith('DAY|')){const p=l.split('|');cur={day:p[1],theme:p[2]||'',items:[]};days.push(cur);}
+    else if(l.startsWith('ACT|')&&cur){const p=l.split('|');cur.items.push({type:'act',time:p[1]||'',text:p[2]||''});}
+    else if(l.startsWith('MEAL|')&&cur){const p=l.split('|');cur.items.push({type:'meal',meal:p[1]||'',name:p[2]||'',desc:p[3]||'',rating:p[4]||''});}
+  });
+  return days;
+}
+function parseCars(txt){
+  return txt.split('\n').filter(l=>l.startsWith('CAR|')).map(l=>{
+    const p=l.split('|');
+    return {name:p[1]||'',grade:p[2]||'',seats:p[3]||'',trans:p[4]||'',day:p[5]||'',total:p[6]||'',note:p[7]||''};
+  });
+}
+function parseCosts(txt){
+  return txt.split('\n').filter(l=>l.startsWith('COST|')).map(l=>{
+    const p=l.split('|');
+    return {label:p[1]||'',amount:p[2]||'',desc:p[3]||''};
+  });
+}
 
-    # ── Agent 1: 여행지 탐색
-    agent_states["dest"] = "running"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+// ──────────────────────────────────────────────
+// 렌더
+// ──────────────────────────────────────────────
+function renderDests(dests){
+  return `<div class="dest-grid">${dests.map((d,i)=>`
+    <div class="dest-card ${i===0?'top':''}">
+      <div class="dest-flag">${d.flag}</div>
+      <div class="dest-name">${d.name}</div>
+      <div class="dest-sub">${d.sub}</div>
+      <div class="dest-score">추천도 ${d.score}점</div>
+      <div class="dest-reason">${d.reason}</div>
+    </div>`).join('')}</div>`;
+}
 
-    with st.spinner("🗺️ 여행지 에이전트 탐색 중..."):
-        raw_dest = call_gemini(model, prompt_destination(all_keywords, travel_type, nights))
-    dests = parse_destinations(raw_dest)
-    top_dest = dests[0]["name"] if dests else "여행지"
+function renderFlights(flights){
+  return flights.map(f=>`
+    <div class="flight-card">
+      <div class="flt-top"><span class="flt-airline">${f.airline}</span><span class="flt-price">${f.price}</span></div>
+      <div class="flt-row">
+        <span class="flt-time">${f.dep}</span>
+        <div class="flt-line"><span class="flt-dur">${f.dur}</span></div>
+        <span class="flt-time">${f.arr}</span>
+      </div>
+      <span class="badge">${f.direct}</span>
+    </div>`).join('') + `<p class="tip">* 왕복 기준, 성수기·예약 시점에 따라 가격이 달라질 수 있습니다.</p>`;
+}
 
-    agent_states["dest"] = "done"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+function renderSched(days){
+  return days.map(d=>`
+    <div class="day-block">
+      <div class="day-dot"></div>
+      <div class="day-title">Day ${d.day} — ${d.theme}</div>
+      ${d.items.map(item=>item.type==='act'
+        ? `<div class="item-row"><span class="item-time">${item.time}</span><span class="item-text">${item.text}</span></div>`
+        : `<div class="item-row"><span class="meal-tag">${item.meal}</span><span class="item-text"><span class="rest-name">${item.name}</span> <span class="rest-desc">${item.desc} ${item.rating}</span></span></div>`
+      ).join('')}
+    </div>`).join('');
+}
 
-    # ── Agent 2: 항공·교통
-    agent_states["flight"] = "running"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+function renderCars(cars){
+  return cars.map(c=>`
+    <div class="car-card">
+      <div><div class="car-name">${c.name}</div><div class="car-spec">${c.grade}·${c.trans}·${c.seats}·${c.note}</div></div>
+      <div><div class="car-day">${c.day}<span style="font-size:.7rem;font-weight:400;color:#6B8EB0">/일</span></div><div class="car-total">합계 ${c.total}</div></div>
+    </div>`).join('') + `<p class="tip">* 국제운전면허증 필수. 유류비·톨비 별도.</p>`;
+}
 
-    with st.spinner("✈️ 항공·교통 에이전트 검색 중..."):
-        raw_flight = call_gemini(model, prompt_flight(top_dest, travel_type, nights))
-    flights = parse_flights(raw_flight)
+function renderCosts(costs, peopleLabel){
+  return `<div class="cost-bar">${costs.map(c=>`
+    <div class="cost-item ${c.label.includes('합계')?'total':''}">
+      <div class="cl">${c.label}</div>
+      <div class="cv">${c.amount}</div>
+    </div>`).join('')}</div>
+    <p class="tip">* 모든 금액은 예상치이며 실제 예약 시점·시즌에 따라 달라질 수 있습니다.</p>`;
+}
 
-    agent_states["flight"] = "done"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+function secWrap(icon, title, inner){
+  return `<div class="sec-wrap fade-in"><div class="sec-head"><span>${icon}</span><span>${title}</span></div><div class="sec-body">${inner}</div></div>`;
+}
 
-    # ── Agent 3: 일정
-    agent_states["sched"] = "running"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+// ──────────────────────────────────────────────
+// 메인 에이전트 실행
+// ──────────────────────────────────────────────
+async function runAgent(){
 
-    with st.spinner("📅 일정 에이전트 생성 중..."):
-        raw_sched = call_gemini(model, prompt_schedule(top_dest, all_keywords, nights, travel_type))
-    schedule = parse_schedule(raw_sched)
 
-    agent_states["sched"] = "done"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+  const kw   = getKeywords();
+  const {adults,children} = getPeople();
+  const total = adults+children;
+  const peopleLabel = `성인${adults}명`+(children>0?`+아동${children}명`:'');
+  const btn  = document.getElementById('runBtn');
+  const errBox = document.getElementById('errorBox');
 
-    # ── Agent 4: 렌터카 (해외 또는 섬)
-    need_car = travel_type == "해외" or any(w in top_dest for w in ["제주", "오키나와", "발리", "세부", "푸켓"])
-    if need_car:
-        agent_states["car"] = "running"
-        with agent_ph.container():
-            render_agent_bar(agent_states)
+  btn.disabled = true;
+  errBox.classList.add('hidden');
+  document.getElementById('agentWrap').classList.remove('hidden');
+  document.getElementById('resultWrap').classList.add('hidden');
+  document.getElementById('resultWrap').innerHTML = '';
+  ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'','대기 중'));
 
-        with st.spinner("🚗 렌터카 에이전트 검색 중..."):
-            raw_car = call_gemini(model, prompt_car(top_dest, nights, total_people))
-        cars = parse_cars(raw_car)
+  try {
+    // Agent 1: 여행지
+    agState('dest','running','탐색 중...');
+    const rawDest = await callGemini(pDest(kw, travelType, nights));
+    const dests   = parseDests(rawDest);
+    const topDest = dests[0]?.name || '여행지';
+    agState('dest','done','완료 ✓');
 
-        agent_states["car"] = "done"
-    else:
-        raw_car = ""
-        cars = []
-        agent_states["car"] = "skip"
+    // Agent 2: 항공
+    agState('flight','running','검색 중...');
+    const rawFlight = await callGemini(pFlight(topDest, travelType, nights));
+    const flights   = parseFlights(rawFlight);
+    agState('flight','done','완료 ✓');
 
-    with agent_ph.container():
-        render_agent_bar(agent_states)
+    // Agent 3: 일정
+    agState('sched','running','생성 중...');
+    const rawSched = await callGemini(pSched(topDest, kw, nights, travelType));
+    const schedule = parseSched(rawSched);
+    agState('sched','done','완료 ✓');
 
-    # ── Agent 5: 비용 분석
-    agent_states["cost"] = "running"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
-
-    with st.spinner("💰 비용 분석 에이전트 계산 중..."):
-        raw_cost = call_gemini(model, prompt_summary(
-            top_dest, travel_type, nights, raw_flight, raw_car,
-            adults, children))
-    costs = parse_costs(raw_cost)
-
-    agent_states["cost"] = "done"
-    with agent_ph.container():
-        render_agent_bar(agent_states)
-
-    # 결과 저장
-    st.session_state.result = {
-        "dests":       dests,
-        "top_dest":    top_dest,
-        "flights":     flights,
-        "schedule":    schedule,
-        "cars":        cars,
-        "costs":       costs,
-        "need_car":    need_car,
-        "keywords":    all_keywords,
-        "travel_type": travel_type,
-        "nights":      nights,
-        "adults":      adults,
-        "children":    children,
-        "total_people": total_people,
-        "people_label": people_label,
+    // Agent 4: 렌터카 (해외 or 섬)
+    const needCar = travelType==='overseas'||['제주','오키나와','발리','세부','푸켓'].some(w=>topDest.includes(w));
+    let rawCar='', cars=[];
+    if(needCar){
+      agState('car','running','검색 중...');
+      rawCar = await callGemini(pCar(topDest, nights, total));
+      cars   = parseCars(rawCar);
+      agState('car','done','완료 ✓');
+    } else {
+      agState('car','skip','해당없음');
     }
-    st.session_state.running = False
-    st.rerun()
 
-# ──────────────────────────────────────────────
-# 결과 출력
-# ──────────────────────────────────────────────
-if st.session_state.get("result"):
-    r = st.session_state.result
+    // Agent 5: 비용
+    agState('cost','running','계산 중...');
+    const rawCost = await callGemini(pCost(topDest,travelType,nights,rawFlight,rawCar,adults,children));
+    const costs   = parseCosts(rawCost);
+    agState('cost','done','완료 ✓');
 
-    st.markdown("---")
-    st.markdown(f"## 📋 {r['top_dest']} — {r['nights']}박 {r['nights']+1}일 여행 계획")
-    st.caption(f"키워드: {r['keywords']} · {r['travel_type']} 여행 · {r['people_label']} ({r['total_people']}명)")
+    // 결과 렌더
+    const flightTitle = travelType==='overseas'?'항공편':'교통편';
+    const costTitle   = `예상 비용 (${peopleLabel} 기준)`;
+    let html = `
+      <h2 style="font-size:1.1rem;font-weight:700;color:#0B3D5E;margin-bottom:.3rem">${topDest} — ${nights}박${nights+1}일 여행 계획</h2>
+      <p style="font-size:.78rem;color:#6B8EB0;margin-bottom:1rem">키워드: ${kw} · ${travelType==='domestic'?'국내':'해외'} · ${peopleLabel}</p>
+      ${secWrap('🗺️','추천 여행지',renderDests(dests))}
+      ${secWrap('✈️',flightTitle,renderFlights(flights))}
+      ${secWrap('📅','여행 일정 (맛집 포함)',renderSched(schedule))}
+      ${needCar&&cars.length ? secWrap('🚗','렌터카',renderCars(cars)) : ''}
+      ${secWrap('💰',costTitle,renderCosts(costs,peopleLabel))}
+      <button onclick="resetAll()" style="width:100%;padding:11px;background:white;border:1.5px solid #E2ECF4;border-radius:12px;font-size:.9rem;color:#334E6A;cursor:pointer;margin-top:.5rem;font-family:inherit">🔄 다시 검색하기</button>
+    `;
+    const rw = document.getElementById('resultWrap');
+    rw.innerHTML = html;
+    rw.classList.remove('hidden');
 
-    # 섹션 1: 여행지
-    st.markdown('<div class="sec-wrap"><div class="sec-head"><span>🗺️</span><span>추천 여행지</span></div><div class="sec-body">',
-                unsafe_allow_html=True)
-    render_destinations(r["dests"])
-    st.markdown("</div></div>", unsafe_allow_html=True)
+  } catch(e){
+    errBox.textContent = '❌ 오류: ' + e.message;
+    errBox.classList.remove('hidden');
+    ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'',''));
+  }
 
-    # 섹션 2: 항공
-    title = "항공편" if r["travel_type"] == "해외" else "교통편"
-    st.markdown(f'<div class="sec-wrap"><div class="sec-head"><span>✈️</span><span>{title}</span></div><div class="sec-body">',
-                unsafe_allow_html=True)
-    render_flights(r["flights"])
-    st.markdown("</div></div>", unsafe_allow_html=True)
+  btn.disabled = false;
+}
 
-    # 섹션 3: 일정
-    st.markdown('<div class="sec-wrap"><div class="sec-head"><span>📅</span><span>여행 일정 (맛집 포함)</span></div><div class="sec-body">',
-                unsafe_allow_html=True)
-    render_schedule(r["schedule"])
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # 섹션 4: 렌터카 (필요 시)
-    if r["need_car"] and r["cars"]:
-        st.markdown('<div class="sec-wrap"><div class="sec-head"><span>🚗</span><span>렌터카</span></div><div class="sec-body">',
-                    unsafe_allow_html=True)
-        render_cars(r["cars"])
-        st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # 섹션 5: 비용
-    cost_title = f"예상 비용 ({r['people_label']} 기준)"
-    st.markdown(f'<div class="sec-wrap"><div class="sec-head"><span>💰</span><span>{cost_title}</span></div><div class="sec-body">',
-                unsafe_allow_html=True)
-    render_costs(r["costs"])
-    st.markdown('<p class="tip">* 모든 금액은 예상치이며 실제 예약 시점·시즌·선택 옵션에 따라 크게 달라질 수 있습니다.</p>',
-                unsafe_allow_html=True)
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    st.divider()
-    if st.button("🔄 다시 검색하기", use_container_width=True):
-        st.session_state.result = None
-        st.rerun()
+function resetAll(){
+  document.getElementById('resultWrap').innerHTML='';
+  document.getElementById('resultWrap').classList.add('hidden');
+  document.getElementById('agentWrap').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'','대기 중'));
+}
+</script>
+</body>
+</html>
