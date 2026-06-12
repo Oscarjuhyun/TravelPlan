@@ -241,9 +241,9 @@ let activeTags = new Set();
 // 추가 : 에이전트 개별 재실행 전역변수
 let currentKw = '';
 let currentAdults = '2';
-let curretnChildren = '0';
+let currentChildren = '0';
 let currentTotal = '2';
-let currentPeopleLable = '';=
+let currentPeopleLable = '';
 
 // ──────────────────────────────────────────────
 // API 키 & 모델
@@ -254,7 +254,7 @@ function saveApiKey(){
    const v = document.getElementById('apiInput').value.trim();
    if(!v){ alert('API 키를 입력하세요.'); return;}
    API_KEY = v;
-   document.getElementById('api0k').style.display = ".block";  
+   document.getElementById('api0k').style.display = "block";  
 }
 
 // ──────────────────────────────────────────────
@@ -279,7 +279,6 @@ function renderDests(dests){
     </div>`).join('')}</div>
     <p class="tip" style="text-align:center; font-weight:600; color:#1A7A8A;">💡 위 후보지 중 원하는 곳을 클릭하면 항공, 일정, 비용 분석이 시작됩니다.</p>`;
 }
-===
 
 function toggleTag(el){
   el.classList.toggle('active');
