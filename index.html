@@ -1,4 +1,4 @@
-==<!DOCTYPE html>
+===<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -238,6 +238,13 @@ let travelType = 'domestic';
 let nights    = 3;
 let activeTags = new Set();
 
+// 추가 : 에이전트 개별 재실행 전역변수
+let currentKw = '';
+let currentAdults = '2';
+let curretnChildren = '0';
+let currentTotal = '2';
+let currentPeopleLable = '';=
+
 // ──────────────────────────────────────────────
 // API 키 & 모델
 // ──────────────────────────────────────────────
@@ -247,7 +254,7 @@ function saveApiKey(){
    const v = document.getElementById('apiInput').value.trim();
    if(!v){ alert('API 키를 입력하세요.'); return;}
    API_KEY = v;
-   document.getElementById('api0k').style.display = "=block";  
+   document.getElementById('api0k').style.display = ".block";  
 }
 
 // ──────────────────────────────────────────────
@@ -258,6 +265,21 @@ function setType(t){
   document.getElementById('btnDomestic').classList.toggle('active', t==='domestic');
   document.getElementById('btnOverseas').classList.toggle('active', t==='overseas');
 }
+
+function renderDests(dests){
+  // ★ 수정: onclick 이벤트와 클릭 유도 텍스트(👆 클릭하여 선택) 추가
+  return `<div class="dest-grid" style="margin-bottom:15px;">${dests.map((d,i)=>`
+    <div class="dest-card" id="card-${d.name}" onclick="selectDest('${d.name.replace(/'/g, "\\'")}')" style="cursor:pointer; transition:all 0.2s;" title="클릭 시 이 여행지로 상세 계획 수립">
+      <div class="dest-flag">${d.flag}</div>
+      <div class="dest-name">${d.name}</div>
+      <div class="dest-sub">${d.sub}</div>
+      <div class="dest-score">추천도 ${d.score}점</div>
+      <div class="dest-reason" style="font-weight:500; color:#1A7A8A; margin-top:5px;">👆 클릭하여 선택</div>
+      <div class="dest-reason" style="border-top:1px dashed #E2ECF4; margin-top:6px; padding-top:4px;">${d.reason}</div>
+    </div>`).join('')}</div>
+    <p class="tip" style="text-align:center; font-weight:600; color:#1A7A8A;">💡 위 후보지 중 원하는 곳을 클릭하면 항공, 일정, 비용 분석이 시작됩니다.</p>`;
+}
+===
 
 function toggleTag(el){
   el.classList.toggle('active');
@@ -465,13 +487,18 @@ function secWrap(icon, title, inner){
 // ──────────────────────────────────────────────
 // 메인 에이전트 실행
 // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// 메인 에이전트 실행 (1단계: 여행지 라인업 확보)
+// ──────────────────────────────────────────────
 async function runAgent(){
-
-
-  const kw   = getKeywords();
+  // 전역 변수에 입력 조건 세이브
+  currentKw   = getKeywords();
   const {adults,children} = getPeople();
-  const total = adults+children;
-  const peopleLabel = `성인${adults}명`+(children>0?`+아동${children}명`:'');
+  currentAdults = adults;
+  currentChildren = children;
+  currentTotal = adults+children;
+  currentPeopleLabel = `성인${adults}명`+(children>0?`+아동${children}명`:'');
+  
   const btn  = document.getElementById('runBtn');
   const errBox = document.getElementById('errorBox');
 
@@ -483,67 +510,112 @@ async function runAgent(){
   ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'','대기 중'));
 
   try {
-    // Agent 1: 여행지
-    agState('dest','running','탐색 중...');
-    const rawDest = await callGemini(pDest(kw, travelType, nights));
+    // Agent 1: 여행지만 먼저 탐색
+    agState('dest','running','4대 후보지 탐색 중...');
+    const rawDest = await callGemini(pDest(currentKw, travelType, nights));
     const dests   = parseDests(rawDest);
-    const topDest = dests[0]?.name || '여행지';
     agState('dest','done','완료 ✓');
 
-    // Agent 2: 항공
-    agState('flight','running','검색 중...');
-    const rawFlight = await callGemini(pFlight(topDest, travelType, nights));
-    const flights   = parseFlights(rawFlight);
-    agState('flight','done','완료 ✓');
+    if(dests.length === 0) throw new Error("형식에 맞는 여행지 추천을 받지 못했습니다.");
 
-    // Agent 3: 일정
-    agState('sched','running','생성 중...');
-    const rawSched = await callGemini(pSched(topDest, kw, nights, travelType));
-    const schedule = parseSched(rawSched);
-    agState('sched','done','완료 ✓');
-
-    // Agent 4: 렌터카 (해외 or 섬)
-    const needCar = travelType==='overseas'||['제주','오키나와','발리','세부','푸켓'].some(w=>topDest.includes(w));
-    let rawCar='', cars=[];
-    if(needCar){
-      agState('car','running','검색 중...');
-      rawCar = await callGemini(pCar(topDest, nights, total));
-      cars   = parseCars(rawCar);
-      agState('car','done','완료 ✓');
-    } else {
-      agState('car','skip','해당없음');
-    }
-
-    // Agent 5: 비용
-    agState('cost','running','계산 중...');
-    const rawCost = await callGemini(pCost(topDest,travelType,nights,rawFlight,rawCar,adults,children));
-    const costs   = parseCosts(rawCost);
-    agState('cost','done','완료 ✓');
-
-    // 결과 렌더
-    const flightTitle = travelType==='overseas'?'항공편':'교통편';
-    const costTitle   = `예상 비용 (${peopleLabel} 기준)`;
+    // 하위 에이전트 결과(2~5번)들이 차례대로 주입될 공간(Holder)을 설계합니다.
     let html = `
-      <h2 style="font-size:1.1rem;font-weight:700;color:#0B3D5E;margin-bottom:.3rem">${topDest} — ${nights}박${nights+1}일 여행 계획</h2>
-      <p style="font-size:.78rem;color:#6B8EB0;margin-bottom:1rem">키워드: ${kw} · ${travelType==='domestic'?'국내':'해외'} · ${peopleLabel}</p>
-      ${secWrap('🗺️','추천 여행지',renderDests(dests))}
-      ${secWrap('✈️',flightTitle,renderFlights(flights))}
-      ${secWrap('📅','여행 일정 (맛집 포함)',renderSched(schedule))}
-      ${needCar&&cars.length ? secWrap('🚗','렌터카',renderCars(cars)) : ''}
-      ${secWrap('💰',costTitle,renderCosts(costs,peopleLabel))}
-      <button onclick="resetAll()" style="width:100%;padding:11px;background:white;border:1.5px solid #E2ECF4;border-radius:12px;font-size:.9rem;color:#334E6A;cursor:pointer;margin-top:.5rem;font-family:inherit">🔄 다시 검색하기</button>
+      <h2 style="font-size:1.1rem;font-weight:700;color:#0B3D5E;margin-bottom:.3rem">AI 추천 여행지 라인업</h2>
+      <p style="font-size:.78rem;color:#6B8EB0;margin-bottom:1rem">조건: ${currentKw} · ${travelType==='domestic'?'국내':'해외'} · ${currentPeopleLabel}</p>
+      
+      ${secWrap('🗺️','추천 여행지 리스트',renderDests(dests))}
+      
+      <div id="dynamicDetailWrap" class="hidden">
+        <h3 id="selectedDestTitle" style="font-size:1.05rem; font-weight:700; color:#0B3D5E; margin:1.5rem 0 0.6rem;"></h3>
+        <div id="sec-flight-holder"></div>
+        <div id="sec-sched-holder"></div>
+        <div id="sec-car-holder"></div>
+        <div id="sec-cost-holder"></div>
+        <button onclick="resetAll()" style="width:100%;padding:11px;background:white;border:1.5px solid #E2ECF4;border-radius:12px;font-size:.9rem;color:#334E6A;cursor:pointer;margin-top:.5rem;font-family:inherit">🔄 다시 검색하기</button>
+      </div>
     `;
     const rw = document.getElementById('resultWrap');
     rw.innerHTML = html;
     rw.classList.remove('hidden');
 
+    // UX 편의를 위해 첫 번째 추천 여행지를 자동으로 먼저 로딩해 줍니다.
+    selectDest(dests[0].name);
+
   } catch(e){
     errBox.textContent = '❌ 오류: ' + e.message;
     errBox.classList.remove('hidden');
-    ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'',''));
+    ['dest','flight','sched','car','cost'].forEach(id=>agState(id,'','오류'));
   }
 
   btn.disabled = false;
+}
+
+// ★ 완전히 새로 추가되는 함수: 클릭 시 하위 에이전트(2~5)들을 새로 호출하여 갱신
+async function selectDest(destName) {
+  // 선택된 카드 시각적 강조 피드백
+  document.querySelectorAll('.dest-card').forEach(c => {
+    c.style.borderColor = '#E2ECF4'; c.style.background = 'white';
+  });
+  const selectedCar = document.getElementById('card-' + destName);
+  if(selectedCar) {
+    selectedCar.style.borderColor = '#2AB5A0';
+    selectedCar.style.background = 'linear-gradient(135deg,#F0FAFA,#EAF6F8)';
+  }
+
+  const dWrap = document.getElementById('dynamicDetailWrap');
+  const dTitle = document.getElementById('selectedDestTitle');
+  dWrap.classList.remove('hidden');
+  dTitle.textContent = `📍 선택된 여행지: [ ${destName} ] 상세 일정 및 비용 분석`;
+
+  // 로딩 플레이스홀더 세팅
+  const loadingHtml = `<div style="padding:1.5rem; text-align:center; color:#6B8EB0; font-size:0.85rem;"><span class="spin"></span> 정보를 분석하고 있습니다...</div>`;
+  const fHolder = document.getElementById('sec-flight-holder');
+  const sHolder = document.getElementById('sec-sched-holder');
+  const cHolder = document.getElementById('sec-car-holder');
+  const costHolder = document.getElementById('sec-cost-holder');
+
+  fHolder.innerHTML = loadingHtml; sHolder.innerHTML = loadingHtml; cHolder.innerHTML = ''; costHolder.innerHTML = loadingHtml;
+  ['flight','sched','car','cost'].forEach(id=>agState(id,'','대기 중'));
+
+  try {
+    // Agent 2: 항공/교통
+    agState('flight','running','교통 정보 파악 중...');
+    const rawFlight = await callGemini(pFlight(destName, travelType, nights));
+    const flights   = parseFlights(rawFlight);
+    fHolder.innerHTML = secWrap('✈️', travelType==='overseas'?'항공편':'교통편', renderFlights(flights));
+    agState('flight','done','완료 ✓');
+
+    // Agent 3: 일정
+    agState('sched','running','맞춤 상세 스케줄링 중...');
+    const rawSched = await callGemini(pSched(destName, currentKw, nights, travelType));
+    const schedule = parseSched(rawSched);
+    sHolder.innerHTML = secWrap('📅', '여행 일정 (맛집 포함)', renderSched(schedule));
+    agState('sched','done','완료 ✓');
+
+    // Agent 4: 렌터카
+    const needCar = travelType==='overseas'||['제주','오키나와','발리','세부','푸켓'].some(w=>destName.includes(w));
+    let rawCar='', cars=[];
+    if(needCar){
+      cHolder.innerHTML = loadingHtml;
+      agState('car','running','렌터카 시세 조회 중...');
+      rawCar = await callGemini(pCar(destName, nights, currentTotal));
+      cars   = parseCars(rawCar);
+      cHolder.innerHTML = secWrap('🚗', '렌터카', renderCars(cars));
+      agState('car','done','완료 ✓');
+    } else {
+      cHolder.innerHTML = ''; agState('car','skip','해당없음');
+    }
+
+    // Agent 5: 비용 분석
+    agState('cost','running','종합 비용 산출 중...');
+    const rawCost = await callGemini(pCost(destName,travelType,nights,rawFlight,rawCar,currentAdults,currentChildren));
+    const costs   = parseCosts(rawCost);
+    costHolder.innerHTML = secWrap('💰', `예상 비용 (${currentPeopleLabel} 기준)`, renderCosts(costs));
+    agState('cost','done','완료 ✓');
+
+  } catch (error) {
+    alert('상세 정보를 연산하는 중 에러가 발생했습니다: ' + error.message);
+  }
 }
 
 function resetAll(){
