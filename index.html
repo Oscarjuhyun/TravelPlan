@@ -1,4 +1,4 @@
-=<!DOCTYPE html>
+==<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -154,6 +154,17 @@ body{font-family:'Noto Sans KR',sans-serif;background:#F4F7FB;color:#1E3A4A;min-
   </div>
 
   <!-- 입력 폼 -->
+    <!-- API 키 설정 카드 (누락되었던 UI 추가) -->
+  <div class="card">
+    <span class="card-label">🔑 Gemini API 설정</span>
+    <div class="api-row">
+      <input type="password" class="api-input" id="apiInput" placeholder="AIZA Sy..." />
+      <button class="api-save" onclick="saveApiKey()">설정 저장</button>
+    </div>
+    <div class="api-hint">발급받은 Gemini API Key를 입력하세요. 브라우저 세션에만 임시 유지됩니다.</div>
+    <div class="api-ok" id="api0k">✓ API 인증 키가 로컬 변수에 등록되었습니다.</div>
+  </div>
+
   <div class="card">
     <span class="card-label">🔍 여행 조건 입력</span>
 
@@ -236,7 +247,7 @@ function saveApiKey(){
    const v = document.getElementById('apiInput').value.trim();
    if(!v){ alert('API 키를 입력하세요.'); return;}
    API_KEY = v;
-   document.getElementById('api0k').style.display = "block';  
+   document.getElementById('api0k').style.display = "=block";  
 }
 
 // ──────────────────────────────────────────────
