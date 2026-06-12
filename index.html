@@ -232,12 +232,12 @@ let activeTags = new Set();
 // ──────────────────────────────────────────────
 
 
-//function selectModel(btn){
-//  document.querySelectorAll('.model-btn').forEach(b=>b.classList.remove('active'));
-//  btn.classList.add('active');
-  // ★ 이 줄이 app.py 184번째 줄의 모델 지정과 동일한 역할
-//  MODEL = btn.dataset.model;
-//}
+function saveApiKey(){
+   const v = document.getElementById('apiInpu').value.trim();
+   if(!v){ alert('API 키를 입력하세요.'); return;}
+   API_KEY = v;
+   document.getElementById('api0k').style.display = "block';  
+}
 
 // ──────────────────────────────────────────────
 // 폼 인터랙션
